@@ -192,7 +192,6 @@ plt3 = plot(hours, p_IDM_buy_profile,
 plot!(hours, p_IDM_sell_profile, label="IDM Sell Offer", linewidth=1.5, color=:lightblue, linestyle=:dashdot)
 display(plt3) 
 
-# Plot 4: FCR Offers
 plt4 = plot(hours, p_FCR_up_profile, 
     label="FCR Up", seriestype=:steppost, linewidth=2, color=:red,
     xlabel="Hours", ylabel="MW", title="FCR Offers",
@@ -202,7 +201,6 @@ plt4 = plot(hours, p_FCR_up_profile,
 plot!(hours, p_FCR_dn_profile, label="FCR Downward", linewidth=1.5, color=:purple, linestyle=:dash)
 display(plt4) 
 
-# Plot 5: aFRR Offers
 plt5 = plot(hours, p_aFRR_up_profile, 
     label="aFRR Up", seriestype=:steppost, linewidth=2, color=:red,
     xlabel="Hours", ylabel="MW", title="aFRR Offers",
@@ -212,7 +210,6 @@ plt5 = plot(hours, p_aFRR_up_profile,
 plot!(hours, p_aFRR_dn_profile, label="aFRR Downward", linewidth=1.5, color=:purple, linestyle=:dash)
 display(plt5) 
 
-# Plot 6: mFRR Offers
 plt6 = plot(hours, p_mFRR_up_profile, 
     label="mFRR Up", seriestype=:steppost,linewidth=2, color=:red,
     xlabel="Hours", ylabel="MW", title="mFRR Offers",
