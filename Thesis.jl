@@ -7,7 +7,7 @@ const GRB_ENV = Gurobi.Env()
 const T = 96
 const Dt = 0.25
 const Scenarios = 7
-const P = 0.1
+const P = 15
 
 struct MarketRealization
     λ_DA::Float64
