@@ -239,7 +239,7 @@ end
 include("gate_scenario_tree.jl")
 
 const TREE_K = INSTANCE === :PI ? (length(TRAIN), 1, 1) :
-    Tuple(parse.(Int, split(get(ENV, "BESS_TREE_K", "4,3,2"), ",")))
+    Tuple(parse.(Int, split(get(ENV, "BESS_TREE_K", "3,2,2"), ",")))
 @info """
     ========================================================
       RUNNING THE $(INSTANCE) INSTANCE
