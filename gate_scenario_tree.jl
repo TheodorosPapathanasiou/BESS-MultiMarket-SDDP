@@ -132,9 +132,6 @@ function build_gate_tree(days::Vector{DayScenario}; K = (4, 3, 2), T::Int, seed:
     leaves = [isempty(members[l]) ?
               centroid(days, collect(1:n), "leaf$l-EMPTY") :
               centroid(days, members[l], "leaf$l") for l in 1:n4]
-
-    @info "Gate tree: $n days -> $n2 / $n3 / $n4 nodes at the IDA1 / ISP / IDA2 gates" *
-          "; leaf sizes $(length.(members))"
     return GateTree(leaves, members, P, leafof, (c2, c3, c4), (S2, S3, S4))
 end
 
