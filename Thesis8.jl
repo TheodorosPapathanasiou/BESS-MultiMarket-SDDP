@@ -13,11 +13,10 @@
 #      ISP1 (16:45 D-1) non-binding — indicative only, no money
 #      ISP2 (00:00 D)   binds DP  1..48 = MTU  1..48  (00:00-12:00)
 #      ISP3 (12:00 D)   binds DP 49..96 = MTU 49..96  (12:00-24:00)
-import Pkg
-Pkg.add("HiGHS")
-using JuMP, SDDP, HiGHS , CSV, DataFrames, LinearAlgebra, Statistics, Dates, Printf, Random
 
+using JuMP, SDDP, Gurobi, CSV, DataFrames, LinearAlgebra, Statistics, Dates, Printf, Random
 
+const GRB_ENV = Gurobi.Env()
 
 # -----------------------------------------------------------------------------
 # 1. TIME AXIS AND GATE CALENDAR
@@ -46,7 +45,7 @@ const LAG_RTBM = 3        # T-45'
 # -----------------------------------------------------------------------------
 const DA_BLK  = 4
 const IDA_BLK = 4
-const RES_BLK = 4
+const RES_BLK = 16
 
 nblk(w) = cld(MTU, w) #how many blocks are required
 blk(m, w) = cld(m, w) #which block does MTU m belong to
@@ -110,7 +109,7 @@ function load_days(path::AbstractString)
     ("DateTime" in names(df)) || rename!(df, names(df)[1] => :DateTime)
     nraw = nrow(df)
     df = df[.!ismissing.(df.DateTime), :]
-    nraw > nrow(df) && @info "Dropped $(nraw - nrow(df)) rows with no DateTime."
+    nraw > nrow(df)
     fmt    = dateformat"dd/mm/yyyy HH:MM:SS"
     starts = [strip(first(split(String(s), " - "))) for s in df.DateTime]
     dts    = DateTime[]
@@ -182,7 +181,6 @@ function load_days(path::AbstractString)
             ones(6, MTU),
         ))
     end
-    @info "Loaded $(length(days)) complete days; dropped $(length(dropped))." dropped
     return days
 end
 
@@ -199,7 +197,6 @@ const NC_BAND = 0.25 * TOL_BE * NCAP
 const IMB_P90 = quantile([v for d in ALL_DAYS for v in d.λ_Imb], 0.9)
 const PEN_ND  = parse(Float64, get(ENV, "BESS_PEN_MULT", "1.0")) *
                 (IMB_P90 + UNCNPBE * A_NPBE)
-@info "Non-delivery cost from RAE 478/2022" UNCNPBE A_NPBE TOL_BE charge_only=UNCNPBE*A_NPBE imbalance_p90=IMB_P90 PEN_ND
 
 # -----------------------------------------------------------------------------
 # 4a. mFRR ACTIVATION — offer price
@@ -215,7 +212,6 @@ function apply_mfrr_offer_rule!(days::Vector{DayScenario}; q::Float64 = MFRR_OFF
         d.a[6, :] .= Float64.(d.λ_RT_mFRR_dn .<= dn .+ 1e-9)
     end
     after = (mean(mean(d.a[5, :]) for d in days), mean(mean(d.a[6, :]) for d in days))
-    @info "mFRR activation rule at q=$q" clamped_ratio_up_dn=before offer_rule_up_dn=after
     return (up, dn)
 end
 const MFRR_OFFER = apply_mfrr_offer_rule!(ALL_DAYS)
@@ -234,21 +230,11 @@ else
     tr = [d for (i, d) in enumerate(ALL_DAYS) if i % 3 != 0]
     tr[1:min(N_TRAIN, length(tr))], te
 end
-@info "Split" mode=SPLIT_MODE n_train=length(TRAIN) n_test=length(TEST)
 
 include("gate_scenario_tree.jl")
 
 const TREE_K = INSTANCE === :PI ? (length(TRAIN), 1, 1) :
     Tuple(parse.(Int, split(get(ENV, "BESS_TREE_K", "3,2,2"), ",")))
-@info """
-    ========================================================
-      RUNNING THE $(INSTANCE) INSTANCE
-        training days : $(length(TRAIN))
-        tree K        : $(TREE_K)
-        reserve price : $(INSTANCE === :PI ? "lambda_last, always accepted" :
-                                             "own offer at quantile OFFER_Q")
-    ========================================================
-    """
 const TREE   = build_gate_tree(TRAIN; K = TREE_K, T = T)
 const SCEN   = TREE.leaves
 const S      = length(SCEN)
@@ -269,7 +255,6 @@ if INSTANCE !== :PI
             leaf.accept[k, m] = OFFER[k, m] <= leaf.λ_last[k, m] + 1e-9 ? 1.0 : 0.0
         end
     end
-    @info "Pay-as-bid offers at q=$OFFER_Q" mean_offer_EUR_per_MW_h=mean(OFFER) mean_acceptance=mean(mean(l.accept) for l in TREE.leaves)
 end
 blkavg(v, b, w) = (lo = (b-1)*w + 1; hi = min(b*w, MTU); mean(@view v[lo:hi]))
 
@@ -289,7 +274,6 @@ const PEN_SOC  =  20 * PMAX   # SOC bound violation
 const PEN_TERM =  50 * PMAX   # terminal SOC shortfall
 const PEN_GATE =  20 * PMAX   # gate feasibility drift
 @assert PEN_SOC > PEN_ND "SOC violation must cost more than non-delivery"
-@info "Penalty scale from PMAX = $(round(PMAX, digits=1)) EUR/MWh" PEN_ND PEN_SOC PEN_TERM
 
 function naive_revenue_bound(d::DayScenario)
     tot = 0.0
@@ -305,7 +289,6 @@ function naive_revenue_bound(d::DayScenario)
     return tot
 end
 const UB = 2 * maximum(naive_revenue_bound, ALL_DAYS)
-@info "SDDP upper_bound set to $(round(UB, digits=0)) EUR/day"
 
 # -----------------------------------------------------------------------------
 # 5. WITHIN-DAY UNCERTAINTY: utilisation factors
@@ -344,7 +327,15 @@ model = SDDP.MarkovianPolicyGraph(;
     sense = :Max,
     upper_bound = UB,
     optimizer = JuMP.optimizer_with_attributes(
-        () -> HiGHS.Optimizer()),
+        () -> Gurobi.Optimizer(GRB_ENV),
+        "OutputFlag" => 0,
+        "DualReductions" => 0,
+        "Method"         => 1,
+        "Threads"        => 1,
+        "Presolve"       => 0,
+        "FeasibilityTol" => 1e-7,
+        "OptimalityTol"  => 1e-7,
+        "NumericFocus"   => 0),
 ) do sp, node
 
     t, i = node
@@ -549,7 +540,7 @@ Random.seed!(1234)
 SDDP.numerical_stability_report(model)
 
 SDDP.train(model;
-    iteration_limit = parse(Int, get(ENV, "BESS_ITERS", "6000")),
+    iteration_limit = parse(Int, get(ENV, "BESS_ITERS", "1500")),
     time_limit      = parse(Float64, get(ENV, "BESS_TIME_LIMIT", "86400.0")),        
     stopping_rules  = [SDDP.BoundStalling(300, 1e-2)],
     log_frequency   = 100,
